@@ -1,0 +1,130 @@
+name: Build PS1 ISO
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build jq unzip wget curl
+
+      - name: Cache PSn00bSDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: /tmp/psn00bsdk
+          key: psn00bsdk-linux-v1
+
+      - name: Download PSn00bSDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -e
+
+          echo "Buscando última release do PSn00bSDK..."
+
+          ASSET_URL=$(curl -fsSL \
+            https://api.github.com/repos/Lameguy64/PSn00bSDK/releases/latest \
+            | jq -r '
+                .assets[]
+                | select(.name | startswith("PSn00bSDK-"))
+                | select(.name | endswith("-Linux.zip"))
+                | .browser_download_url
+              ' \
+            | head -n 1)
+
+          if [ -z "$ASSET_URL" ]; then
+            echo "ERRO: não encontrei o ZIP do PSn00bSDK!"
+            echo "Assets disponíveis:"
+            curl -fsSL \
+              https://api.github.com/repos/Lameguy64/PSn00bSDK/releases/latest \
+              | jq -r '.assets[].name'
+            exit 1
+          fi
+
+          echo "Asset encontrado:"
+          echo "$ASSET_URL"
+
+          wget -q --show-progress "$ASSET_URL" -O psn00bsdk.zip
+
+          echo "Extraindo SDK..."
+          rm -rf /tmp/psn00bsdk
+          mkdir -p /tmp/psn00bsdk
+
+          unzip -q psn00bsdk.zip -d /tmp/psn00bsdk
+
+      - name: Locate SDK root
+        shell: bash
+        run: |
+          set -e
+
+          echo "Procurando sdk.cmake..."
+
+          SDK_CMAKE=$(find /tmp/psn00bsdk -type f -name sdk.cmake | head -n 1)
+
+          if [ -z "$SDK_CMAKE" ]; then
+            echo "ERRO: sdk.cmake não encontrado!"
+            echo
+            echo "Estrutura encontrada:"
+            find /tmp/psn00bsdk -maxdepth 6 -type f | sort
+            exit 1
+          fi
+
+          echo "sdk.cmake:"
+          echo "$SDK_CMAKE"
+
+          SDK_ROOT=$(dirname "$(dirname "$(dirname "$SDK_CMAKE")")")
+
+          echo
+          echo "SDK_ROOT:"
+          echo "$SDK_ROOT"
+
+          if [ ! -d "$SDK_ROOT/libpsn00b" ]; then
+            echo "ERRO: libpsn00b não encontrada!"
+            echo "Procurando libpsn00b:"
+            find /tmp/psn00bsdk -type d -name libpsn00b
+            exit 1
+          fi
+
+          echo "PSN00BSDK_LIBS=$SDK_ROOT/libpsn00b" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake \
+            -B build \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PSN00BSDK_LIBS/cmake/sdk.cmake" \
+            -S .
+
+      - name: Build
+        shell: bash
+        run: |
+          cmake --build build --verbose
+
+      - name: Show build output
+        if: always()
+        run: |
+          echo "=== Arquivos gerados ==="
+          find build -type f | sort
+
+      - name: Upload BIN/CUE
+        uses: actions/upload-artifact@v4
+        with:
+          name: sala-do-neston-ps1
+          path: |
+            build/**/*.bin
+            build/**/*.cue
+            build/*.bin
+            build/*.cue
+          if-no-files-found: error
