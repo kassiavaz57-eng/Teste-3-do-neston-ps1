@@ -1,0 +1,214 @@
+name: Build PS1 ISO
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            jq \
+            unzip \
+            wget \
+            curl
+
+      - name: Cache PSn00bSDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: /tmp/psn00bsdk
+          key: psn00bsdk-linux-v1
+
+      - name: Download PSn00bSDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -e
+
+          echo "Buscando última versão do PSn00bSDK..."
+
+          ASSET_URL=$(curl -fsSL \
+            https://api.github.com/repos/Lameguy64/PSn00bSDK/releases/latest \
+            | jq -r '
+                .assets[]
+                | select(.name | startswith("PSn00bSDK-"))
+                | select(.name | endswith("-Linux.zip"))
+                | .browser_download_url
+              ' | head -n 1)
+
+          if [ -z "$ASSET_URL" ]; then
+            echo "ERRO: não encontrei o pacote Linux do PSn00bSDK!"
+            exit 1
+          fi
+
+          echo "Baixando:"
+          echo "$ASSET_URL"
+
+          rm -f psn00bsdk.zip
+
+          wget -q --show-progress \
+            "$ASSET_URL" \
+            -O psn00bsdk.zip
+
+          rm -rf /tmp/psn00bsdk
+          mkdir -p /tmp/psn00bsdk
+
+          unzip -q psn00bsdk.zip \
+            -d /tmp/psn00bsdk
+
+      - name: Locate SDK
+        shell: bash
+        run: |
+          set -e
+
+          SDK_CMAKE=$(find /tmp/psn00bsdk \
+            -type f \
+            -name sdk.cmake \
+            | head -n 1)
+
+          if [ -z "$SDK_CMAKE" ]; then
+            echo "ERRO: sdk.cmake não encontrado!"
+            find /tmp/psn00bsdk -maxdepth 6 -type f | sort
+            exit 1
+          fi
+
+          SDK_ROOT=$(dirname "$(dirname "$(dirname "$SDK_CMAKE")")")
+
+          echo "SDK_ROOT=$SDK_ROOT"
+          echo "PSN00BSDK_LIBS=$SDK_ROOT/libpsn00b" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/bin" >> "$GITHUB_PATH"
+
+      - name: Locate PSXPad
+        shell: bash
+        run: |
+          set -e
+
+          echo "Procurando libpsxpad..."
+
+          PSXPAD=$(find /tmp/psn00bsdk \
+            -type f \
+            -name 'libpsxpad*.a' \
+            | head -n 1)
+
+          if [ -z "$PSXPAD" ]; then
+            echo "AVISO: libpsxpad não foi encontrada no SDK."
+            echo
+            echo "Bibliotecas disponíveis:"
+            find /tmp/psn00bsdk \
+              -type f \
+              -name '*.a' \
+              | sort
+
+            echo
+            echo "Continuando para deixar o CMake mostrar o erro real..."
+          else
+            PSXPAD_DIR=$(dirname "$PSXPAD")
+
+            echo "libpsxpad encontrada:"
+            echo "$PSXPAD"
+
+            echo "PSXPAD_DIR=$PSXPAD_DIR" >> "$GITHUB_ENV"
+            echo "$PSXPAD_DIR" >> "$GITHUB_PATH"
+          fi
+
+      - name: Fix source compatibility
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f main.c ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("main.c")
+          s = p.read_text()
+
+          s = s.replace(
+              'FntPrint("APERTE X - QUADRO DO NESTON\\n");',
+              'FntPrint(0, "APERTE X - QUADRO DO NESTON\\n");'
+          )
+
+          s = s.replace(
+              'FntPrint("\\n\\n\\n  SE CADA UM DER 1 REAL\\n   -NESTON QUE JOGA\\n\\n   [O] FECHAR");',
+              'FntPrint(0, "\\n\\n\\n  SE CADA UM DER 1 REAL\\n   -NESTON QUE JOGA\\n\\n   [O] FECHAR");'
+          )
+
+          p.write_text(s)
+          PY
+          fi
+
+      - name: Fix texture header guard
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f neston_tex.h ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("neston_tex.h")
+          s = p.read_text()
+
+          s = s.replace(
+              "#ifndef NESTON_TEX_H\n#define NESTON_TEX_H",
+              "#ifndef NESTON_TEX_H_INCLUDED\n#define NESTON_TEX_H_INCLUDED"
+          )
+
+          p.write_text(s)
+          PY
+          fi
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -e
+
+          CMAKE_ARGS=(
+            -B build
+            -G Ninja
+            "-DCMAKE_TOOLCHAIN_FILE=$PSN00BSDK_LIBS/cmake/sdk.cmake"
+            -S .
+          )
+
+          if [ -n "${PSXPAD_DIR:-}" ]; then
+            CMAKE_ARGS+=(
+              "-DCMAKE_LIBRARY_PATH=$PSXPAD_DIR"
+              "-DCMAKE_EXE_LINKER_FLAGS=-L$PSXPAD_DIR"
+            )
+          fi
+
+          cmake "${CMAKE_ARGS[@]}"
+
+      - name: Build
+        shell: bash
+        run: |
+          cmake --build build --verbose
+
+      - name: Show generated files
+        if: always()
+        run: |
+          echo "===== BUILD OUTPUT ====="
+          find build -type f | sort
+
+      - name: Upload PS1 files
+        uses: actions/upload-artifact@v4
+        with:
+          name: sala-do-neston-ps1
+          path: |
+            build/**/*.bin
+            build/**/*.cue
+            build/*.bin
+            build/*.cue
+            build/**/*.exe
+            build/*.exe
+          if-no-files-found: error
