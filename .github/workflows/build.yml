@@ -1,0 +1,43 @@
+name: Build PS1 ISO
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Download PSn00bSDK 0.24
+        run: |
+          curl -L -o psn00bsdk.zip https://github.com/Lameguy64/PSn00bSDK/releases/download/0.24/psn00bsdk-0.24-Linux.zip
+          unzip -q psn00bsdk.zip -d /tmp/
+          SDK_ROOT=$(find /tmp -type f -name sdk.cmake | head -n1 | sed 's|/libpsn00b.*||')
+          echo "SDK_ROOT=$SDK_ROOT"
+          ls -R $SDK_ROOT | head -n 150
+          echo "PSN00BSDK_LIBS=$SDK_ROOT/libpsn00b" >> $GITHUB_ENV
+          echo "$SDK_ROOT/bin" >> $GITHUB_PATH
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=$PSN00BSDK_LIBS/cmake/sdk.cmake -S .
+
+      - name: Build
+        run: |
+          cmake --build build --verbose
+          ls -R build
+
+      - name: Upload BIN/CUE
+        uses: actions/upload-artifact@v4
+        with:
+          name: sala-do-neston-ps1
+          path: |
+            build/*.bin
+            build/*.cue
+            build/**/*.bin
+            build/**/*.cue
+          if-no-files-found: error
