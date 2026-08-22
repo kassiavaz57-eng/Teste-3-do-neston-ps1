@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<iso_project image_name="sala_do_neston.bin" cue_sheet="sala_do_neston.cue">
+    <track type="data">
+        <identifiers
+            system         ="PLAYSTATION"
+            application    ="SALA DO NESTON"
+            volume         ="SALA_NESTON"
+            volume_set     ="SALA_NESTON"
+            publisher      ="HOMEBREW"
+            data_preparer  ="PSN00BSDK"
+        />
+        <directory_tree>
+            <file name="SYSTEM.CNF" type="data" source="SYSTEM.CNF"/>
+            <file name="SALA.EXE"   type="data" source="sala_do_neston.exe"/>
+        </directory_tree>
+    </track>
+</iso_project>
